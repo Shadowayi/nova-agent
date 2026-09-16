@@ -21,6 +21,7 @@
 | 06 | [上下文压缩答案](06-compact.md) | [练习 06](../06-compact.md) |
 | 07 | [工作区答案](07-workspace.md) | [练习 07](../07-workspace.md) |
 | 08 | [Vibe 答案](08-vibe.md) | [练习 08](../08-vibe.md) |
+| 09 | [子 Agent 答案](09-subagents.md) | [练习 09](../09-subagents.md) |
 
 ---
 

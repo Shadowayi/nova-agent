@@ -48,3 +48,5 @@
 动手验证：让 agent 跑长命令 → 点停止 → 任务管理器里 node 进程被清干净（`killSessionProcesses` 生效）。
 
 **为什么**："中断"不是只切断流，而是发散到所有正在运行的资源——两个账本（`activeRuns` 管主回合 abort、`activeSubruns` 管子任务、`sessionProcesses` 管命令进程）分别对应一类需要清理的资源。对应指南 01 的 §2、§9。
+
+> 补充（指南 09 §6）：`abortRun` 的③通过 `activeSubruns` 连带中断——**后台子代理（background）的泵也会把自己注册进这个集合**，所以父一停，后台子一起停，不会留下"父关了、子还在后台烧 token"的幽灵。
