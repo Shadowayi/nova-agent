@@ -23,6 +23,9 @@ import {
   appendNotice, saveSubagent, setSubagentAbort, clearSubagentAbort, interruptSubagent,
 } from './subagents.js'
 import type { SubagentRecord } from './subagents.js'
+// Human-in-the-loop：工具只通过 runtime 注入的服务对象调 ask（capability seam，
+// 对齐 DSH 的 ctx.userQuestions）——本模块不持有服务实例，测试可注入替身。
+import type { AskUserService, AskUserQuestion, AskUserAnswer } from './askUser.js'
 
 // 工具调用 id（与事件/轨迹共用同一 id，前端靠它关联工具卡）
 function uid(): string {
@@ -48,6 +51,8 @@ export interface ToolRuntime {
   /** 子任务中断注册表（主 turn 中断时连带 abort 子任务，防幽灵执行） */
   activeSubruns: Map<string, Set<() => void>>
   abortRun: (sessionId: string) => void
+  /** human-in-the-loop：ask_user 的等待/回答/取消注册表（见 askUser.ts；agentLoop 注入进程级单例） */
+  askUserService: AskUserService
 }
 
 // 内置工具定义：元数据集中声明 + 工厂函数生成 execute。
@@ -526,18 +531,117 @@ const interruptAgentDef: ToolDef = {
   },
 }
 
+// ---------- human-in-the-loop：ask_user（向用户提问并等待回答） ----------
+// 设计对齐（见 guide/10-ask-user.md）：
+//   - DSH：可一次多问（questions[]，id 回显）、选项带 description / (Recommended) / multi_select、
+//     无限等待 + 取消（不设强制超时）。
+//   - 子代理（depth>0）禁止直接问用户——把未决问题带回父代理（对齐 DSH DELEGATED_CALLER）。
+//   - 取消/中断不是 error：工具返回"用户取消了提问"，让模型基于现状换路推进。
+const MAX_ASK_QUESTIONS = 5
+
+const askUserDef: ToolDef = {
+  id: 'ask_user',
+  name: 'ask_user',
+  description:
+    '当你需要用户确认、做选择或补充缺失信息时，向用户提问并等待回答（human-in-the-loop，当前轮暂停）。' +
+    `可一次问 1-${MAX_ASK_QUESTIONS} 个问题；每个问题可带选项（推荐项放第一并标"(Recommended)"），也可让用户自由输入。` +
+    '用户回答后你会拿到结构化答案（selected=所选选项，custom=自定义输入）。' +
+    '纪律：能自己推进 / 信息已足够时不要问；只有真正卡在"需要用户拍板"时才问，问完基于答案继续。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      questions: {
+        type: 'array',
+        description: `要问的问题列表（1-${MAX_ASK_QUESTIONS} 个；每个带稳定 id，回答会回显该 id）`,
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: '稳定问题 id（答案中回显）' },
+            question: { type: 'string', description: '要问的问题（具体、可回答）' },
+            header: { type: 'string', description: '可选短标题（如"确认" / "选择模式"）' },
+            options: {
+              type: 'array',
+              description: '可选选项（推荐项放第一并标"(Recommended)"；每个选项可带一句说明）',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string', description: '选项文本' },
+                  description: { type: 'string', description: '一句话说明该选项的取舍/影响（可选）' },
+                },
+                required: ['label'],
+              },
+            },
+            multi_select: { type: 'boolean', description: '是否允许多选（默认单选）' },
+          },
+          required: ['id', 'question'],
+        },
+      },
+    },
+    required: ['questions'],
+  },
+  createExecute: (rt) => async (args) => {
+    // 子代理不能直接问用户（对齐 DSH DELEGATED_CALLER）：把未决问题带回父代理
+    if (rt.depth > 0) {
+      return {
+        content: 'Error: 子代理不能直接询问用户——请把未决问题带回父代理，由父代理调用 ask_user 询问用户。',
+        isError: true,
+      }
+    }
+    const raw = Array.isArray(args.questions) ? args.questions : []
+    if (raw.length === 0) return { content: 'Error: questions 至少需要 1 个问题', isError: true }
+    if (raw.length > MAX_ASK_QUESTIONS) return { content: `Error: questions 最多 ${MAX_ASK_QUESTIONS} 个`, isError: true }
+    for (const q of raw) {
+      if (!q || typeof q.id !== 'string' || !q.id.trim() || typeof q.question !== 'string' || !q.question.trim()) {
+        return { content: 'Error: 每个问题都需要非空 id 和 question', isError: true }
+      }
+    }
+    const questions = raw as AskUserQuestion[]
+
+    const record = startRecord(rt, 'ask_user', args)
+    const { requestId, wait } = rt.askUserService.createRequest(rt.session.id, questions)
+    // 广播给前端弹窗；SSE 流保持打开，用户回答后 resolve 继续当前轮
+    rt.emit({ type: 'ask_user', sessionId: rt.session.id, requestId, questions })
+
+    const outcome = await wait
+    if (outcome.status === 'cancelled') {
+      endRecord(rt, record, 'error', `cancelled: ${outcome.reason}`)
+      return {
+        content:
+          `用户取消了提问（原因：${outcome.reason}）。不要继续等待；` +
+          '基于你已有的信息给出结论或替代建议，明确告诉用户"你取消了什么、我接下来怎么处理"。',
+      }
+    }
+    const text = formatAskAnswers(outcome.answers)
+    endRecord(rt, record, 'success', text)
+    return { content: text }
+  },
+}
+
+// 把结构化答案转成模型可读文本（对齐 DSH 输出：answers[].id 回显 + selected + custom）
+function formatAskAnswers(answers: AskUserAnswer[]): string {
+  const lines = answers.map((a) => {
+    const parts: string[] = []
+    if (a.selected.length) parts.push(`选择了：${a.selected.join('、')}`)
+    if (a.custom && a.custom.trim()) parts.push(`补充说明：${a.custom.trim()}`)
+    return `- [${a.id}] ${parts.length ? parts.join('；') : '未选择任何选项（无补充）'}`
+  })
+  return `用户回答：\n${lines.join('\n')}`
+}
+
 // 全部内置工具定义（Agent 配置页"内置工具"勾选的就是这些 id；未配置/空数组 = 全部启用）
-export const builtinToolDefs: ToolDef[] = [runCommandDef, globDef, rememberDef, subagentDef, webSearchDef, loadSkillDef, sendMessageDef, listAgentsDef, interruptAgentDef]
+export const builtinToolDefs: ToolDef[] = [runCommandDef, globDef, rememberDef, subagentDef, webSearchDef, loadSkillDef, sendMessageDef, listAgentsDef, interruptAgentDef, askUserDef]
 // 是否应为该 agent 装配某内置工具（语义与 builtinTools.shouldRegisterBuiltin 一致，re-export 统一入口）
 export { shouldRegisterBuiltin }
 
 // ---------- 装配：把"内置 + MCP"统一注册成 AI SDK 工具对象 ----------
 
 // 内置工具装配：按 Agent 勾选过滤 + 条件装配，生成 AI SDK tool
-// 父子通信控制工具（始终装配，不参与勾选过滤）：
-// agent 是否需要它们取决于"是否派生了后台子代理"（运行期动态），静态勾选表达不了；
-// 且子代理随时可能留言给父（send_message to=parent），父没有它就无法应答。
-const CONTROL_TOOLS = new Set(['send_message', 'list_agents', 'interrupt_agent'])
+// 控制/协作工具族（始终装配，不参与勾选过滤）：
+//  - send_message / list_agents / interrupt_agent：agent 是否需要取决于"是否派生了后台子代理"
+//    （运行期动态），静态勾选表达不了；且子代理随时可能留言给父（send_message to=parent），父没有它就无法应答。
+//  - ask_user：human-in-the-loop 基础设施——"是否需要在运行时问用户"同样由运行期决定，
+//    不装配的话 agent 在关键决策点就没有"询问用户"这个选项。与 DSH（工具无条件可用）一致。
+const CONTROL_TOOLS = new Set(['send_message', 'list_agents', 'interrupt_agent', 'ask_user'])
 
 function registerBuiltin(agent: Agent, rt: ToolRuntime, tools: Record<string, unknown>) {
   for (const def of builtinToolDefs) {

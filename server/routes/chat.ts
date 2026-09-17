@@ -1,9 +1,11 @@
-// 聊天路由：SSE 流式对话 + 中断 + vibe 自治循环
+// 聊天路由：SSE 流式对话 + 中断 + vibe 自治循环 + human-in-the-loop 回答
 import express from 'express'
 import type { ChatEvent, Attachment, ReasoningOption } from '../types.js'
 import { getSession, getAgent, saveSession } from '../store.js'
 import { runTurn, abortRun } from '../agentLoop.js'
 import { runVibe } from '../vibe.js'
+import { askUserService } from '../askUser.js'
+import type { AskUserAnswer } from '../askUser.js'
 
 export const chatRouter = express.Router()
 
@@ -88,4 +90,24 @@ chatRouter.post('/stop', (req, res) => {
   const { sessionId } = req.body as { sessionId?: string }
   if (sessionId) abortRun(sessionId)
   res.json({ ok: true })
+})
+
+// human-in-the-loop：前端提交 ask_user 的回答 / 取消
+// body: { sessionId, requestId, answers?, cancelled? }
+//   answers: [{ id, selected[], custom? }] —— 与问题一一对应
+//   cancelled: true —— 用户点了弹窗"取消"（不是中断，turn 继续，工具返回"用户取消"）
+chatRouter.post('/answer', (req, res) => {
+  const { sessionId, requestId, answers, cancelled } = req.body as {
+    sessionId?: string
+    requestId?: string
+    answers?: AskUserAnswer[]
+    cancelled?: boolean
+  }
+  if (!sessionId || !requestId) {
+    return res.status(400).json({ ok: false, error: 'sessionId and requestId required' })
+  }
+  const ok = cancelled
+    ? askUserService.cancel(requestId, sessionId, '用户取消了提问')
+    : askUserService.answer(requestId, sessionId, Array.isArray(answers) ? answers : [])
+  res.json({ ok })
 })

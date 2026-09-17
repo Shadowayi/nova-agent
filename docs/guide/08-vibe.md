@@ -147,7 +147,7 @@ const deadline = Date.now() + Math.max(1, opts.maxMinutes ?? DEFAULT_MAX_MINUTES
 | 07 workspace | 文件权限边界：默认兜底 + 危险目标拒绝 + 占位符联动 |
 | 08 vibe | 目标驱动：编排循环 + 收敛协议 + 熔断 + 预算 |
 
-**这 9 个文件加起来，就是一个"类 Claude Code" agent 的全部骨架**。
+**这 10 个文件加起来，就是一个"类 Claude Code" agent 的全部骨架**。
 你现在能讲清楚：它怎么转、用什么工具、怎么记得你、怎么不烧爆上下文、怎么守住权限边界、怎么自己干完一件事。
 这就是"一个晚上读完一个 agent"的兑现——接下来，改它、拆它、再组装成你自己的。
 

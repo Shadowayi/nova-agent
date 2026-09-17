@@ -1,5 +1,5 @@
 // API 封装：REST + SSE 流式聊天
-import type { Agent, Session, SkillMeta, McpServerConfig, ChatEvent, Message, ToolInfo, Task, ModelProvider, Attachment, KeySource, CustomProvider, ReasoningOption, Memory, WorkspaceInfo } from './types'
+import type { Agent, Session, SkillMeta, McpServerConfig, ChatEvent, Message, ToolInfo, Task, ModelProvider, Attachment, KeySource, CustomProvider, ReasoningOption, Memory, WorkspaceInfo, AskUserAnswer } from './types'
 
 const BASE = '/api'
 
@@ -192,6 +192,26 @@ export function streamVibe(
   maxRounds?: number,
 ): { cancel: () => void } {
   return streamEvents('/chat/vibe', { sessionId, goal, maxRounds }, sessionId, onEvent)
+}
+
+// human-in-the-loop：提交 ask_user 的回答（或取消）。返回 ok 表示后端已消费该提问。
+export async function answerAsk(
+  sessionId: string,
+  requestId: string,
+  answers: AskUserAnswer[],
+  cancelled = false,
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE}/chat/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, requestId, answers, cancelled }),
+    })
+    const data = (await res.json()) as { ok?: boolean }
+    return data.ok === true
+  } catch {
+    return false
+  }
 }
 
 // 工具：根据 toolCalls 生成初始消息标题

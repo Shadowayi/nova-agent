@@ -31,8 +31,9 @@
 | 07 | [工作区练习](07-workspace.md) | [指南 07](../guide/07-workspace.md) | 🟢🟡🟡🔴 | 1-1.5h |
 | 08 | [Vibe 练习](08-vibe.md) | [指南 08](../guide/08-vibe.md) | 🟢🟡🟡🔴 | 1-2h |
 | 09 | [子 Agent 练习](09-subagents.md) | [指南 09](../guide/09-subagents.md) | 🟢🟢🟡🟡🔴 | 1-2h |
+| 10 | [Human-in-the-loop 练习](10-ask-user.md) | [指南 10](../guide/10-ask-user.md) | 🟢🟢🟡🟡🔴 | 1-2h |
 
-> 做完 9 课的全部练习后，去做 [🎓 终极验收项目](capstone.md)——"从零重写一个最小 agent"，那是毕业作品。
+> 做完 10 课的全部练习后，去做 [🎓 终极验收项目](capstone.md)——"从零重写一个最小 agent"，那是毕业作品。
 
 ---
 

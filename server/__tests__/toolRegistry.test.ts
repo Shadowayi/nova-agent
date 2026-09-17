@@ -3,6 +3,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { db } from '../db.js'
 import { builtinToolDefs, assembleTools, shouldRegisterBuiltin } from '../toolRegistry.js'
 import { createSubagent, getSubagent, saveSubagent, setSubagentAbort, appendNotice } from '../subagents.js'
+import { AskUserService } from '../askUser.js'
 import type { Agent, Message, Session, ToolRuntime } from '../types.js'
 
 const TEST_AGENT = '__test_toolreg_agent__'
@@ -47,14 +48,16 @@ function makeRt(agent: Agent): ToolRuntime {
     subagentDepthLimit: 3,
     activeSubruns: new Map(),
     abortRun: () => {},
+    // 每个 runtime 独立的服务实例（不污染进程级单例），测试可直接操作其 pending
+    askUserService: new AskUserService(),
   }
 }
 
 describe('toolRegistry 定义完整性', () => {
-  it('9 个内置工具定义齐全，元数据完整', () => {
+  it('10 个内置工具定义齐全，元数据完整', () => {
     const names = builtinToolDefs.map((d) => d.name).sort()
     expect(names).toEqual([
-      'glob', 'interrupt_agent', 'list_agents', 'load_skill', 'remember',
+      'ask_user', 'glob', 'interrupt_agent', 'list_agents', 'load_skill', 'remember',
       'run_command', 'send_message', 'subagent', 'web_search',
     ])
     for (const def of builtinToolDefs) {
@@ -72,10 +75,10 @@ describe('toolRegistry 定义完整性', () => {
 })
 
 describe('toolRegistry 装配（assembleTools）', () => {
-  it('按 Agent 勾选过滤内置工具（父子通信控制工具始终装配）', () => {
+  it('按 Agent 勾选过滤内置工具（父子通信/人机协作控制工具始终装配）', () => {
     const tools = assembleTools(makeAgent(['glob', 'remember']), makeRt(makeAgent(['glob', 'remember'])), [])
     expect(Object.keys(tools).sort()).toEqual([
-      'glob', 'interrupt_agent', 'list_agents', 'remember', 'send_message',
+      'ask_user', 'glob', 'interrupt_agent', 'list_agents', 'remember', 'send_message',
     ])
   })
 
@@ -83,7 +86,7 @@ describe('toolRegistry 装配（assembleTools）', () => {
     const tools = assembleTools(makeAgent(undefined), makeRt(makeAgent(undefined)), [])
     // 注意：load_skill 是条件装配——没勾技能（skillIds=[]）时不注册
     expect(Object.keys(tools).sort()).toEqual([
-      'glob', 'interrupt_agent', 'list_agents', 'remember',
+      'ask_user', 'glob', 'interrupt_agent', 'list_agents', 'remember',
       'run_command', 'send_message', 'subagent', 'web_search',
     ])
   })
@@ -118,7 +121,7 @@ describe('toolRegistry 装配（assembleTools）', () => {
     }]
     const tools = assembleTools(makeAgent(['glob']), makeRt(makeAgent(['glob'])), mcp)
     expect(Object.keys(tools).sort()).toEqual([
-      'custom_ts_tool', 'glob', 'interrupt_agent', 'list_agents', 'send_message',
+      'ask_user', 'custom_ts_tool', 'glob', 'interrupt_agent', 'list_agents', 'send_message',
     ])
   })
 })
@@ -387,5 +390,102 @@ describe('toolRegistry 后台子代理（continuable）控制工具族', () => {
     expect(r1.isError).toBe(true)
     const r2 = await agent(rt).interrupt_agent.execute({})
     expect(r2.isError).toBe(true)
+  })
+})
+
+describe('toolRegistry ask_user（human-in-the-loop）', () => {
+  // 每个用例独立服务实例：直接操作 rt.askUserService 完成"用户回答"闭环
+  function makeAskRt(depth = 0, sessionId = 'ask-s1') {
+    const rt = makeRt(makeAgent(undefined))
+    rt.depth = depth
+    rt.session = { ...rt.session, id: sessionId }
+    const emitted: string[] = []
+    rt.emit = (e) => emitted.push(e.type)
+    return { rt, emitted }
+  }
+
+  function runAsk(rt: ToolRuntime, questions: unknown) {
+    const tools = assembleTools(rt.agent, rt, []) as Record<string, { execute: (a: Record<string, unknown>) => Promise<{ content: string; isError?: boolean }> }>
+    return tools.ask_user.execute({ questions })
+  }
+
+  it('ask_user 装配：未配置 builtinTools 也始终可用（CONTROL_TOOLS）', () => {
+    const { rt } = makeAskRt()
+    const tools = assembleTools(rt.agent, rt, [])
+    expect(tools.ask_user).toBeTruthy()
+  })
+
+  it('调 ask_user：emit ask_user 事件 + 等待用户回答，answer 后返回结构化答案文本', async () => {
+    const { rt, emitted } = makeAskRt()
+    const questions = [
+      { id: 'q1', question: '部署方式？', options: [{ label: 'Docker (Recommended)' }, { label: '裸机' }] },
+      { id: 'q2', question: '要不要补文档？', multi_select: true },
+    ]
+    const p = runAsk(rt, questions)
+    await new Promise((r) => setTimeout(r, 0))
+    // 事件已广播、服务已注册
+    expect(emitted).toContain('ask_user')
+    const peek = rt.askUserService.peek(rt.session.id)
+    expect(peek?.questions.map((q) => q.id)).toEqual(['q1', 'q2'])
+    // 用户回答
+    const ok = rt.askUserService.answer(peek!.requestId, rt.session.id, [
+      { id: 'q1', selected: ['Docker (Recommended)'] },
+      { id: 'q2', selected: ['是', '再补个示例'], custom: '重点补 MCP 那节' },
+    ])
+    expect(ok).toBe(true)
+    const res = await p
+    expect(res.isError).toBeFalsy()
+    expect(res.content).toContain('用户回答')
+    expect(res.content).toContain('[q1] 选择了：Docker (Recommended)')
+    expect(res.content).toContain('[q2] 选择了：是、再补个示例；补充说明：重点补 MCP 那节')
+    // pending 已消费
+    expect(rt.askUserService.peek(rt.session.id)).toBeNull()
+    expect(rt.executedToolCalls.length).toBe(1)
+    expect(rt.executedToolCalls[0].status).toBe('success')
+  })
+
+  it('用户取消：工具返回"取消了提问"（不是 error），pending 清理', async () => {
+    const { rt } = makeAskRt()
+    const p = runAsk(rt, [{ id: 'q1', question: '继续吗？', options: [{ label: '继续' }, { label: '停' }] }])
+    await new Promise((r) => setTimeout(r, 0))
+    const peek = rt.askUserService.peek(rt.session.id)
+    expect(peek).toBeTruthy()
+    const ok = rt.askUserService.cancel(peek!.requestId, rt.session.id, '用户取消了提问')
+    expect(ok).toBe(true)
+    const res = await p
+    expect(res.isError).toBeFalsy() // 取消不是 error——让模型换路
+    expect(res.content).toContain('用户取消了提问')
+    expect(rt.askUserService.peek(rt.session.id)).toBeNull()
+  })
+
+  it('会话中断：cancelAllForSession 清理该会话所有挂起提问', async () => {
+    const { rt } = makeAskRt()
+    const p = runAsk(rt, [{ id: 'q1', question: '问题' }])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(rt.askUserService.activeCount).toBe(1)
+    const n = rt.askUserService.cancelAllForSession(rt.session.id, '会话已中断')
+    expect(n).toBe(1)
+    const res = await p
+    expect(res.content).toContain('会话已中断')
+    expect(rt.askUserService.activeCount).toBe(0)
+  })
+
+  it('子代理（depth>0）禁止调用：把未决问题带回父代理', async () => {
+    const { rt } = makeAskRt(1)
+    const res = await runAsk(rt, [{ id: 'q1', question: '问题' }])
+    expect(res.isError).toBe(true)
+    expect(res.content).toContain('子代理不能直接询问用户')
+    expect(rt.askUserService.activeCount).toBe(0)
+  })
+
+  it('参数校验：空/超 5 个/缺 id/question 都报错，且不注册 pending', async () => {
+    const { rt } = makeAskRt()
+    const r1 = await runAsk(rt, [])
+    expect(r1.isError).toBe(true)
+    const r2 = await runAsk(rt, Array.from({ length: 6 }, (_, i) => ({ id: `q${i}`, question: `问题${i}` })))
+    expect(r2.isError).toBe(true)
+    const r3 = await runAsk(rt, [{ question: '缺 id' }])
+    expect(r3.isError).toBe(true)
+    expect(rt.askUserService.activeCount).toBe(0)
   })
 })

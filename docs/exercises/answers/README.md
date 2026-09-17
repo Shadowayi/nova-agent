@@ -22,6 +22,7 @@
 | 07 | [工作区答案](07-workspace.md) | [练习 07](../07-workspace.md) |
 | 08 | [Vibe 答案](08-vibe.md) | [练习 08](../08-vibe.md) |
 | 09 | [子 Agent 答案](09-subagents.md) | [练习 09](../09-subagents.md) |
+| 10 | [Human-in-the-loop 答案](10-ask-user.md) | [练习 10](../10-ask-user.md) |
 
 ---
 

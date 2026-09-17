@@ -1,6 +1,6 @@
 # 📚 Nova Agent 课程地图（读代码指南）
 
-> 这不是一份"文档目录"，而是一门**课程**：按 9 个核心文件，把「一个 agent 怎么从零转起来」分三段学会。
+> 这不是一份"文档目录"，而是一门**课程**：按 10 个核心文件，把「一个 agent 怎么从零转起来」分三段学会。
 > 每一篇 = 一节课：**先讲清名词 → 再逐段读代码 → 最后做练习**验证你*真的懂了*（不是"看懂了"）。
 > 配套：每篇末尾有「读完自查」清单，另外有独立**练习册**（含答案分册）和一份**终极验收项目**。
 
@@ -59,6 +59,7 @@ flowchart LR
 | [07](07-workspace.md) | 挑战 | `server/workspace.ts` | 工作区：agent 的文件权限边界 | 01、02 | 说出三类被拒绝的"危险目标"及理由；解释大小写不敏感比较为何必要；说明 `{{workspace}}` 占位符的联动 |
 | [08](08-vibe.md) | 挑战 | `server/vibe.ts` | Vibe 自治循环：目标驱动 | 01-07 全部 | 解释为什么循环必须由编排层驱动；说明 [DONE] 协议与熔断；说出三重预算分别防什么 |
 | [09](09-subagents.md) | 挑战 | `server/toolRegistry.ts` + `server/subagents.ts` | 子 Agent 体系与父子通信 | 01 | 说出 spawn / fork / background 三模式区别与适用场景；画出 send_message 完整数据流；解释结算通知为何注入"父的下一轮"；说出 interrupt 与销毁的区别 |
+| [10](10-ask-user.md) | 挑战 | `server/askUser.ts` + `src/components/AskUserModal.tsx` | Human-in-the-loop：agent 停下来问用户 | 01、09 | 画出 ask_user 完整时序（模型→工具→服务→SSE→弹窗→POST→继续）；说出"取消不是 error"与"中断即清理"；解释 capability seam 与子代理拒绝的取舍 |
 
 ---
 
@@ -78,7 +79,7 @@ flowchart LR
 
 | 资源 | 说明 |
 |---|---|
-| [📘 练习册入口](../exercises/README.md) | 9 篇走读 × 每篇 3-5 道分级动手题（目标/步骤/预期结果/提示） |
+| [📘 练习册入口](../exercises/README.md) | 10 篇走读 × 每篇 3-5 道分级动手题（目标/步骤/预期结果/提示） |
 | [🔑 答案分册](../exercises/answers/README.md) | 每题完整解法与讲解。**先做题，再对答案** |
 | [🎓 终极验收项目](../exercises/capstone.md) | "从零重写一个最小 agent"——全系列综合，毕业作品 |
 
@@ -88,7 +89,7 @@ flowchart LR
 
 | 资料 | 说明 |
 |---|---|
-| [📖 术语总表](../glossary.md) | 9 篇指南全部"黑话"汇总（协议/架构/工程/安全分类） |
+| [📖 术语总表](../glossary.md) | 10 篇指南全部"黑话"汇总（协议/架构/工程/安全分类） |
 | [📄 项目文档](../README.md) | 功能、架构、API、安全模型总览 |
 | [🇨🇳 中文主页](../README.md) | 项目完整中文说明（仓库主页） |
 | [🇬🇧 English](../README.en.md) | 项目完整英文说明 |

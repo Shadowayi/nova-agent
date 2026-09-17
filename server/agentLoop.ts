@@ -12,6 +12,7 @@ import { assembleTools, shouldRegisterBuiltin } from './toolRegistry.js'
 import { newId } from './store.js'
 import { buildMemoryBlock, loadProjectMemory } from './memory.js'
 import { pendingNotices, consumeNotice } from './subagents.js'
+import { askUserService } from './askUser.js'
 import { killSessionProcesses } from './terminal.js'
 
 // 步骤上限：浏览器/文件任务动辄 10-20 步，8 步会被截断导致任务无闭环
@@ -54,6 +55,9 @@ export function abortRun(sessionId: string) {
     for (const abortChild of subs) abortChild()
     activeSubruns.delete(sessionId)
   }
+  // 连带撤销该会话挂起的 ask_user 提问（human-in-the-loop 不留幽灵等待；
+  // 对齐 Codex ElicitationService 的 RAII 释放语义）
+  askUserService.cancelAllForSession(sessionId, '会话已中断')
 }
 
 export async function runTurn(
@@ -124,6 +128,7 @@ export async function runTurn(
       subagentDepthLimit: MAX_SUBAGENT_DEPTH,
       activeSubruns,
       abortRun,
+      askUserService,
     },
     mcpTools,
   )

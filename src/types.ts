@@ -176,6 +176,32 @@ export type ChatEvent =
   | { type: 'vibe_start'; sessionId: string; goal: string; maxRounds: number }
   | { type: 'vibe_round'; sessionId: string; round: number; note: string }
   | { type: 'vibe_done'; sessionId: string; converged: boolean; rounds: number; note: string }
+  // human-in-the-loop：agent 调 ask_user 暂停当前轮等待用户回答（见 askUser.ts）
+  | { type: 'ask_user'; sessionId: string; requestId: string; questions: AskUserQuestion[] }
+
+/** Human-in-the-loop 提问结构（对齐 DSH ask_user_question：id 回显 / 选项 / 多选） */
+export interface AskUserOption {
+  label: string
+  description?: string
+}
+
+export interface AskUserQuestion {
+  /** 稳定问题 id，答案中回显 */
+  id: string
+  question: string
+  /** 可选短标题（如"确认" / "选择模式"） */
+  header?: string
+  /** 可选选项：推荐项放第一并标"(Recommended)" */
+  options?: AskUserOption[]
+  /** 是否允许多选（默认单选） */
+  multi_select?: boolean
+}
+
+export interface AskUserAnswer {
+  id: string
+  selected: string[]
+  custom?: string
+}
 
 /** 思考模式（reasoning）配置：DeepSeek 渠道专用 */
 export interface ReasoningOption {

@@ -4,8 +4,9 @@ import { api, streamChat, streamVibe, autoTitle } from './api'
 import { translateModelError } from './lib/errors'
 import type {
   Agent, Session, SkillMeta, McpServerConfig, Message, ToolCallRecord, ChatEvent, ModelProvider, Attachment, Task,
-  KeySource, CustomProvider, ReasoningOption, MessageSegment, Memory, WorkspaceInfo,
+  KeySource, CustomProvider, ReasoningOption, MessageSegment, Memory, WorkspaceInfo, AskUserQuestion, AskUserAnswer,
 } from './types'
+import { answerAsk } from './api'
 
 // 网络请求自动重试（后端启动竞态兜底）
 async function fetchWithRetry<T>(fn: () => Promise<T>, retries = 3, delay = 800): Promise<T> {
@@ -59,6 +60,8 @@ interface MainState {
   // vibe 自治循环状态（目标驱动多轮执行）
   vibeRunning: boolean
   vibeRound: { round: number; maxRounds: number } | null
+  // human-in-the-loop：agent 正在等待用户回答的提问（弹窗由此渲染；null = 无挂起提问）
+  pendingAsk: { sessionId: string; requestId: string; questions: AskUserQuestion[] } | null
 
   // config
   providerKeyStatus: Record<string, KeySource> // providerId → key 状态
@@ -101,6 +104,8 @@ interface MainState {
   loadWorkspace: () => Promise<void>
   saveWorkspace: (path: string) => Promise<string | null>
   sendVibe: (goal: string, maxRounds?: number) => Promise<void>
+  answerAsk: (answers: AskUserAnswer[]) => Promise<void>
+  cancelAsk: () => Promise<void>
 }
 
 let taskPollTimer: ReturnType<typeof setInterval> | null = null
@@ -128,6 +133,7 @@ export const useMainStore = create<MainState>()((set, get) => ({
   cancelFn: null,
   vibeRunning: false,
   vibeRound: null,
+  pendingAsk: null,
   providerKeyStatus: {},
   reasoningPref: { type: 'adaptive' },
   initialized: false,
@@ -467,6 +473,21 @@ export const useMainStore = create<MainState>()((set, get) => ({
       return (err as Error).message
     }
   },
+
+  // human-in-the-loop：提交当前提问的回答（answerAsk）或取消（cancelAsk）
+  async answerAsk(answers: AskUserAnswer[]) {
+    const ask = get().pendingAsk
+    if (!ask) return
+    const ok = await answerAsk(ask.sessionId, ask.requestId, answers)
+    if (ok) set({ pendingAsk: null })
+  },
+
+  async cancelAsk() {
+    const ask = get().pendingAsk
+    if (!ask) return
+    const ok = await answerAsk(ask.sessionId, ask.requestId, [], true)
+    if (ok) set({ pendingAsk: null })
+  },
 }))
 
 // ---------- 事件处理（SSE 流） ----------
@@ -568,11 +589,18 @@ function handleEvent(set: StoreSet, get: () => MainState, e: ChatEvent) {
       set({ sessions: s.sessions.map((x) => (x.id === session.id ? patched : x)) })
       break
     }
+    case 'ask_user': {
+      // human-in-the-loop：记录挂起提问（弹窗渲染；AskUserModal 只展示当前会话的）
+      set({ pendingAsk: { sessionId: e.sessionId, requestId: e.requestId, questions: e.questions } })
+      break
+    }
     case 'done': {
       const patched = { ...session, messages: [...session.messages, e.message] }
       const update: Partial<MainState> = {
         sessions: s.sessions.map((x) => (x.id === session.id ? patched : x)),
       }
+      // 回合结束：挂起提问必然已结算（answered / cancelled / 中断清理），弹窗兜底关闭
+      update.pendingAsk = null
       // 只有完成的是当前会话才清流式状态；后台会话完成不动临时区
       if (isCurrent) {
         update.currentText = ''
@@ -608,6 +636,7 @@ function handleEvent(set: StoreSet, get: () => MainState, e: ChatEvent) {
         currentToolCalls: [],
         currentSegments: [],
         cancelFn: null,
+        pendingAsk: null,
       })
       // 完成通知（用户已授权通知时）
       if ('Notification' in window && Notification.permission === 'granted') {
@@ -630,6 +659,8 @@ function handleEvent(set: StoreSet, get: () => MainState, e: ChatEvent) {
         update.streaming = false
         update.cancelFn = null
         update.streamingSessionId = ''
+        // 回合已结束：挂起提问兜底关闭（后端 abortRun 已撤销）
+        update.pendingAsk = null
         // 保留流式尾部为消息
         if (s.currentText || s.currentToolCalls.length || s.currentSegments.length) {
           const { content, toolCalls, segments } = tailFromSegments(s.currentSegments, s.currentText)
