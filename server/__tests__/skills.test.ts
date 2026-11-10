@@ -1,6 +1,30 @@
 // 技能系统单元测试：目录块（懒加载入口）与 load_skill 的加载函数
 import { describe, it, expect } from 'vitest'
-import { skillCatalog, loadSkillContent } from '../skills.js'
+import { skillCatalog, loadSkillContent, parseFrontmatter } from '../skills.js'
+
+describe('parseFrontmatter（CRLF 兼容：Windows autocrlf 检出）', () => {
+  it('LF 行尾正常解析', () => {
+    const { meta, body } = parseFrontmatter('---\nname: 测试技能\ndescription: 描述文字\nwhen_to_use: 使用时机\n---\n正文第一行\n第二行')
+    expect(meta.name).toBe('测试技能')
+    expect(meta.description).toBe('描述文字')
+    expect(meta.when_to_use).toBe('使用时机')
+    expect(body).toContain('正文第一行')
+  })
+
+  it('CRLF 行尾：frontmatter 不被丢弃（回归：曾致技能目录全空）', () => {
+    const { meta, body } = parseFrontmatter('---\r\nname: 测试技能\r\ndescription: 描述文字\r\nwhen_to_use: 使用时机\r\n---\r\n正文内容')
+    expect(meta.name).toBe('测试技能')
+    expect(meta.description).toBe('描述文字')
+    expect(meta.when_to_use).toBe('使用时机')
+    expect(body).toBe('正文内容')
+  })
+
+  it('无 frontmatter：meta 为空、body 原样返回', () => {
+    const { meta, body } = parseFrontmatter('纯正文，没有 frontmatter')
+    expect(meta.name).toBeUndefined()
+    expect(body).toBe('纯正文，没有 frontmatter')
+  })
+})
 
 describe('skillCatalog（目录块：只给名字+描述，不给正文）', () => {
   it('空勾选 = 空字符串（不花 token）', () => {

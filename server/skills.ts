@@ -11,9 +11,13 @@ interface Frontmatter {
   when_to_use?: string
 }
 
-// 极简 YAML frontmatter 解析（够用：key: value 单行）
-function parseFrontmatter(raw: string): { meta: Frontmatter; body: string } {
-  const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
+// 极简 YAML frontmatter 解析（够用：key: value 单行）。
+// CRLF 兼容：Windows 检出（core.autocrlf=true）会把 SKILL.md 落成 CRLF 行尾，
+// /^---\n/ 会匹配失败导致 frontmatter 整体丢弃（技能目录全空）——先归一化再匹配。
+// CI 在 Linux（LF）下发现不了这类问题，故本地全量测试必须过。
+export function parseFrontmatter(raw: string): { meta: Frontmatter; body: string } {
+  const norm = raw.replace(/\r\n/g, '\n')
+  const m = norm.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
   if (!m) return { meta: {}, body: raw }
   const meta: Frontmatter = {}
   for (const line of m[1].split('\n')) {
