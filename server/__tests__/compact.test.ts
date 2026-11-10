@@ -1,10 +1,27 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   estimateTokens, shouldCompact, contextWindowFor, contextUsage, sanitizeContextWindow, COMPACT_PCT,
   maybePruneToolOutput, PRUNE_MARKER, PRUNE_THRESHOLD_CHARS, PRUNE_HEAD_CHARS, PRUNE_TAIL_CHARS,
   isContextWindowExceededError, computeKeepFrom, COMPACT_MIN_KEEP,
 } from '../compact.js'
-import type { Session } from '../types.js'
+import type { Session, Agent } from '../types.js'
+
+// —— 滚动摘要回归测试用 mock：捕获 summarize 的完整 prompt、喂固定回复 ——
+// vi.mock 会提升到文件顶部；上方纯函数用例不经过 generateText，不受影响。
+const captured = vi.hoisted(() => ({
+  prompts: [] as string[],
+  answers: [] as string[],
+}))
+vi.mock('ai', () => ({
+  generateText: vi.fn(async ({ prompt }: { prompt: string }) => {
+    captured.prompts.push(prompt)
+    return { text: captured.answers.shift() ?? '（空摘要）' }
+  }),
+}))
+vi.mock('../models.js', () => ({
+  createModel: () => ({}),
+  resolveModel: () => null,
+}))
 
 function mkSession(messages: Array<{ role: string; content: string; tokens?: { input: number; output: number } }>): Session {
   return {
@@ -154,5 +171,63 @@ describe('computeKeepFrom：保留条数 + token 预算双约束', () => {
   it('保留预算充足时不裁剪', () => {
     const msgs = Array.from({ length: 10 }, () => ({ content: 'x' })) // 每条 1 token
     expect(computeKeepFrom(msgs, 8, 160)).toBe(2) // 保留 8 条 × 1 token ≤ 160
+  })
+})
+
+// ---------- 滚动摘要（回归）：二次压缩必须继承上一版摘要 ----------
+// 场景：长对话压缩不止一次。session.summary 不在 messages 里——若第二次压缩只总结
+// messages.slice(0, keepFrom)，第一次压缩的摘要就会被整体覆盖，其中的事实全部丢失。
+function mkAgent(): Agent {
+  return {
+    id: 'a', name: 'a', persona: '测试助手', model: 'deepseek/deepseek-v4-flash',
+    mcpServerIds: [], skillIds: [], color: '#000', createdAt: 0,
+  }
+}
+
+describe('滚动摘要（回归）：二次压缩必须继承上一版摘要', () => {
+  it('第二次压缩的 summarize 输入应同时包含新压缩消息和旧摘要中的事实', async () => {
+    const { compactSession } = await import('../compact.js')
+    const agent = mkAgent()
+    captured.prompts.length = 0
+    captured.answers.length = 0
+
+    // —— 第一次压缩：旧历史里埋事实 A（玄武-47），凑 45 条越过消息数门槛 ——
+    const msgs = [
+      { role: 'user' as const, content: '我们项目的内部代号定为玄武-47，后续文档都用这个代号。' },
+      { role: 'assistant' as const, content: '好的，已记录：本项目内部代号玄武-47。' },
+    ]
+    let n = 0
+    while (msgs.length < 46) {
+      msgs.push({ role: 'user' as const, content: `例行同步第 ${++n} 次：进展一切正常，无阻塞。` })
+      msgs.push({ role: 'assistant' as const, content: '收到，继续按计划推进。' })
+    }
+    const session = mkSession(msgs.slice(0, 45))
+    captured.answers.push('摘要一：项目内部代号是玄武-47。')
+    const r1 = await compactSession(session, agent)
+    expect(r1).not.toBeNull()
+    expect(session.summary).toContain('玄武-47')
+    expect(captured.prompts[0]).toContain('玄武-47')
+
+    // —— 第二次压缩：新一段历史里埋事实 B；mock 固定回复不含任何事实，杜绝回显误判 ——
+    const before = session.messages.length
+    session.messages.push({ id: 'b1', role: 'user', content: '进入二期：预算上限确定为 3.2 万元。', createdAt: 0 })
+    session.messages.push({ id: 'b2', role: 'assistant', content: '收到，二期预算上限 3.2 万元。', createdAt: 0 })
+    let k = 0
+    while (session.messages.length < before + 26) {
+      session.messages.push({ id: `f${++k}u`, role: 'user', content: `二期例行同步第 ${k} 次：联调顺利，无阻塞。`, createdAt: 0 })
+      if (session.messages.length < before + 26) {
+        session.messages.push({ id: `f${k}a`, role: 'assistant', content: '收到，按计划推进二期。', createdAt: 0 })
+      }
+    }
+    // mock 回复模拟"合规摘要员"（合并旧摘要与新消息）——本测试的断言重点是
+    // summarize 的**输入**是否继承了旧摘要（captured.prompts[1]），而非 mock 回显。
+    captured.answers.push('摘要二：项目内部代号玄武-47；二期预算上限 3.2 万元。')
+    const r2 = await compactSession(session, agent)
+    expect(r2).not.toBeNull()
+
+    // 第二次 summarize 的输入必须包含：本次被压缩的消息（事实 B）+ 上一版摘要（事实 A）
+    expect(captured.prompts[1]).toContain('3.2 万') // 新消息进来了（当前实现即满足）
+    expect(captured.prompts[1]).toContain('玄武-47') // 旧摘要被继承 ← 当前实现会丢失（RED）
+    expect(session.summary).toContain('玄武-47') // 摘要覆盖后事实 A 仍在最终摘要里
   })
 })

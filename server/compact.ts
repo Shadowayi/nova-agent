@@ -114,14 +114,19 @@ export interface CompactResult {
   kept: number
 }
 
-/** 压缩选项：force = 忽略消息数门槛（溢出恢复用）；keep = 覆盖保留条数（溢出恢复用更少） */
+/** 压缩选项：force = 忽略消息数门槛（溢出恢复用）；keep = 覆盖保留条数（溢出恢复用更少）；
+ *  window = 覆盖模型窗口（压测/模拟小窗口用，缺省走 models.json 注册表） */
 export interface CompactOptions {
   force?: boolean
   keep?: number
+  window?: number
 }
 
-// 用 LLM 把一批消息总结成摘要（结构化提示词，输出纯文本）
-export async function summarizeMessages(messages: Message[], model: string): Promise<string> {
+// 用 LLM 把一批消息总结成摘要（结构化提示词，输出纯文本）。
+// priorSummary：上一版摘要（滚动摘要）。二次及以后的压缩必须把旧摘要与新压缩的消息
+// 合并成一份新摘要——否则旧摘要被整体覆盖，其中只有旧摘要才知道的事实会永久丢失
+// （压测实测：fact-recall 场景二次压缩后当场命中率 100% → 50%，见 scripts/bench/）。
+export async function summarizeMessages(messages: Message[], model: string, priorSummary?: string): Promise<string> {
   // 构造对话文本：只保留角色与内容（工具调用细节省略，保留关键结果）
   const transcript = messages
     .map((m) => {
@@ -138,15 +143,25 @@ export async function summarizeMessages(messages: Message[], model: string): Pro
     .join('\n\n')
     .slice(-30000) // 截断超长输入，防止超出模型上下文
 
+  // 滚动摘要：旧摘要作为独立段落放在新增对话之前，要求合并继承
+  const prompt = priorSummary
+    ? `## 此前摘要（更早对话的压缩记录，其中所有关键事实必须保留）\n${priorSummary}\n\n## 新增对话\n${transcript}`
+    : transcript
+
+  const rules = [
+    '1. 保留：用户的目标与需求、关键事实/决定、已完成的工作、未完成或待办事项、重要数据与结论',
+    '2. 省略：寒暄、重复内容、工具调用的机械细节（但记录关键结果）',
+  ]
+  if (priorSummary) {
+    rules.push('3. 输入包含「此前摘要」时：新摘要必须继承其中的全部关键事实（代号/数字/日期/人名/约定/决定等），再合并新增对话的关键信息——绝不允许只总结新增对话而丢弃此前摘要的内容')
+  }
+  rules.push(`${rules.length + 1}. 使用与对话相同的语言；以"对话摘要："开头`)
+  rules.push(`${rules.length + 1}. 总长度不超过 ${SUMMARY_MAX_CHARS} 字符，直接输出摘要正文，不要解释`)
+
   const { text } = await generateText({
     model: createModel(model),
-    system:
-      '你是对话摘要引擎。请把用户提供的对话记录压缩成一份简洁的上下文摘要，供后续对话继续使用。要求：\n' +
-      '1. 保留：用户的目标与需求、关键事实/决定、已完成的工作、未完成或待办事项、重要数据与结论\n' +
-      '2. 省略：寒暄、重复内容、工具调用的机械细节（但记录关键结果）\n' +
-      '3. 使用与对话相同的语言；以"对话摘要："开头\n' +
-      `4. 总长度不超过 ${SUMMARY_MAX_CHARS} 字符，直接输出摘要正文，不要解释`,
-    prompt: transcript,
+    system: '你是对话摘要引擎。请把用户提供的对话记录压缩成一份简洁的上下文摘要，供后续对话继续使用。要求：\n' + rules.join('\n'),
+    prompt,
   })
 
   const summary = text.trim()
@@ -183,6 +198,8 @@ export function computeKeepFrom(messages: Array<{ content: string }>, keepCount:
 
 // 执行压缩：总结最早的消息（保留最近 keep 条，且保留部分受 token 预算比例约束），
 // 摘要存 session.summary（摘要不进消息列表，由 agentLoop 注入 system prompt；前端横幅读取 summary）。
+// 滚动摘要：二次及以后的压缩会把上一版 session.summary 一起交给 LLM 合并继承，
+// 避免重复压缩时旧摘要被覆盖导致信息丢失。
 // force=true 时忽略消息数门槛（上下文溢出恢复用，即使历史不长也压出空间）。
 // 返回 null 表示无需/无法压缩。
 export async function compactSession(session: Session, agent: Agent, opts?: CompactOptions): Promise<CompactResult | null> {
@@ -193,7 +210,8 @@ export async function compactSession(session: Session, agent: Agent, opts?: Comp
   // 保留"最近 keepCount 条"；keep 参数覆盖默认（溢出恢复用更少）
   const keepCount = Math.max(1, Math.min(opts?.keep ?? COMPACT_KEEP, messages.length - 1))
   // 保留预算（对齐 DSH retainRatio）：保留部分的文本估算 token ≤ 窗口 × RETAIN_PCT
-  const window = contextWindowFor(agent.model)
+  // （window 覆盖供压测模拟小窗口；缺省走 models.json 注册表）
+  const window = opts?.window ?? contextWindowFor(agent.model)
   const retainBudget = (window * COMPACT_RETAIN_PCT) / 100
 
   const keepFrom = computeKeepFrom(messages, keepCount, retainBudget)
@@ -202,7 +220,8 @@ export async function compactSession(session: Session, agent: Agent, opts?: Comp
   const toSummarize = messages.slice(0, keepFrom)
   const kept = messages.slice(keepFrom)
 
-  const summary = await summarizeMessages(toSummarize, agent.model)
+  // 滚动摘要：把上一版摘要一并交给 LLM 继承合并（首次压缩时 session.summary 为空，行为不变）
+  const summary = await summarizeMessages(toSummarize, agent.model, session.summary)
 
   session.messages = kept
   session.summary = summary
