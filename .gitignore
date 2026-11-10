@@ -7,6 +7,9 @@ dist-server/
 
 # 运行时数据（Agent/Session/配置/SQLite）
 data/
+
+# 压测原始结果（报告正文整理进 docs/bench/ 后再入库）
+scripts/bench/out/
 *.db
 *.db-wal
 *.db-shm

@@ -35,6 +35,9 @@
     "build:all": "npm run build && npm run build:server",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "vitest run",
+    "bench:context": "tsx scripts/bench/run.ts",
+    "bench:fixtures": "tsx scripts/bench/fixtures.ts",
+    "bench:rescore": "tsx scripts/bench/rescore.ts",
     "start": "node dist-server/index.js"
   },
   "dependencies": {
