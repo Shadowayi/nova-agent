@@ -22,8 +22,9 @@ describe('run_command 终端工具', () => {
   it('cwd 参数：在工作区子目录执行', async () => {
     const r = await executeCommand(SESSION, { command: 'node -p "process.cwd()"', cwd: '.' })
     expect(r.isError).toBeUndefined()
-    // 子目录 '.' 应解析到工作区根（cwd 输出应含 workspace 目录名）
-    expect(r.content).toContain('nova-agent')
+    // 子目录 '.' 应解析到工作区根：断言输出含 workspace 目录名。
+    // 不断言仓库目录名（原为 'nova-agent'）——克隆目录名因机器而异，与被测机制无关。
+    expect(r.content).toContain('workspace')
   })
 
   it('cwd 越界：拒绝工作区之外的目录', async () => {
