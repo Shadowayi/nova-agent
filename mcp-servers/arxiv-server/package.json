@@ -1,0 +1,28 @@
+{
+  "name": "nova-arxiv-mcp-server",
+  "version": "0.1.0",
+  "description": "arXiv 论文检索 MCP Server（search_papers / get_paper）——Nova Agent 自研 MCP Server 示例，经 stdio 接入任意 MCP 客户端",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "arxiv-mcp-server": "dist/index.js"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "smoke": "tsx test/smoke.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "fast-xml-parser": "^4.5.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}

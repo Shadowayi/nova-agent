@@ -173,10 +173,13 @@ nova-agent/
 │  └─ styles.css              # 设计体系（渐变/玻璃/动画）
 ├─ skills/                    # 技能（SKILL.md，Agent Skills 格式）
 │  ├─ browser-ops/SKILL.md
-│  └─ file-ops/SKILL.md
+│  ├─ file-ops/SKILL.md
+│  └─ paper-ops/SKILL.md
 ├─ mcp-servers/               # MCP server 配置（JSON）
 │  ├─ filesystem.json
-│  └─ playwright.json
+│  ├─ playwright.json
+│  ├─ arxiv.json              # 自研 arXiv server（源码在同目录 arxiv-server/ 子包）
+│  └─ arxiv-server/           # 自研 MCP Server：arXiv 论文检索（TypeScript，独立安装构建）
 ├─ data/                      # 运行时数据（SQLite 数据库，不入库）
 ├─ workspace/                 # 默认工作区（设置页可配置；不入库）
 ├─ docs/                      # 教学文档（课程地图/练习册/走读指南/术语总表）
@@ -253,6 +256,7 @@ when_to_use: 使用时机
 |---|---|
 | `playwright` | [@playwright/mcp](https://github.com/microsoft/playwright-mcp)：浏览器操作（打开 / 点击 / 截图 / 读取） |
 | `filesystem` | [@modelcontextprotocol/server-filesystem](https://github.com/modelcontextprotocol/servers)：读写文件（**仅限工作区根目录**，可配置） |
+| `arxiv` | **自研**（[mcp-servers/arxiv-server](./mcp-servers/arxiv-server)）：arXiv 论文检索（`search_papers` / `get_paper`，Atom XML 适配 + 限流退避）。首次使用先 `npm run build:arxiv` |
 
 ### 内置 Skills
 
@@ -260,6 +264,7 @@ when_to_use: 使用时机
 |---|---|
 | `browser-ops` | 浏览器操作专家（配 playwright） |
 | `file-ops` | 文件操作助手（配 filesystem） |
+| `paper-ops` | 文献检索助手（配 arxiv：查询语法、先搜后取、限速礼仪） |
 
 ---
 

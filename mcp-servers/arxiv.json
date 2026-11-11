@@ -1,0 +1,7 @@
+{
+  "id": "arxiv",
+  "name": "arXiv 论文检索",
+  "command": "node",
+  "args": ["mcp-servers/arxiv-server/dist/index.js"],
+  "timeoutMs": 30000
+}
